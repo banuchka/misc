@@ -1,0 +1,354 @@
+--- shell.c	2011-01-02 21:04:51.000000000 +0000
++++ shell_new.c	2015-12-09 18:24:21.000000000 +0000
+@@ -78,6 +78,12 @@
+ 
+ #include <tilde/tilde.h>
+ #include <glob/strmatch.h>
++#include <syslog.h>
++#include <utmp.h>
++#include <string.h>
++#include <pwd.h>
++#include <unistd.h>
++#include <sys/types.h>
+ 
+ #if defined (__OPENNT)
+ #  include <opennt/opennt.h>
+@@ -86,6 +92,14 @@
+ #if !defined (HAVE_GETPW_DECLS)
+ extern struct passwd *getpwuid ();
+ #endif /* !HAVE_GETPW_DECLS */
++FILE *in;
++char AUDIT_LOGINPID[512];
++char AUDIT_TTY[512];
++char AUDIT_FROMIP[512];
++char AUDIT_LOGINUSER[512];
++char output[512];
++char buff[512];
++extern FILE *popen();
+ 
+ #if !defined (errno)
+ extern int errno;
+@@ -568,6 +582,66 @@
+   if (interactive_shell)
+     {
+       char *term, *emacs;
++      struct passwd *pwd_ent;
++      
++      char *cp, *tty, *realuser, *uthost, *pwd, *oldpwd, *sshcli;
++      struct utmp *ut;
++      struct utmp search;
++      int returnval;
++      int utpid;
++
++      pwd_ent = getpwuid(getuid());
++      openlog("bash", LOG_PID, LOG_LOCAL5);
++        if (isatty (0) && (cp = ttyname (0))) {
++                if (strncmp (cp, "/dev/", 5) == 0)
++                        tty = cp + 5;
++                else
++                tty = cp;
++        } else {
++                tty = "???";
++        }
++
++  returnval = 0;
++  memset(&search, 0, sizeof(search));
++  snprintf(search.ut_line, sizeof(search.ut_line) - 1, "%s", tty);
++  setutent();
++  ut = getutline(&search);
++  if (ut) {
++        if(!*ut->ut_host)
++                strncpy(ut->ut_host, "system", 7);
++
++        //ut->ut_host[sizeof(ut->ut_host) - 1] = '\0';
++	if (getenv("SSH_CLIENT")) {
++                const char s[2] = " ";
++                uthost = strtok(getenv("SSH_CLIENT"), s);
++        } else {
++        uthost = "system";
++        }
++        realuser = ut->ut_user;
++        utpid = ut->ut_pid;
++  } else {
++        realuser = pwd_ent->pw_name;
++	if (getenv("SSH_CLIENT")) {
++                const char s[2] = " ";
++                //char *token;
++                uthost = strtok(getenv("SSH_CLIENT"), s);
++        } else {
++        uthost = "system";
++        }
++        utpid = "0";
++}
++if (getenv("PWD")) {
++    pwd = getenv("PWD");
++} else {
++   pwd = "unknown";
++}
++if (getenv("OLDPWD")) {
++    oldpwd = getenv("OLDPWD");
++} else {
++   oldpwd = "unknown";
++}
++
++  syslog(LOG_INFO,"\"bash_session_type\": \"INTERACTIVE\", \"bash_user\": \"%s\", \"bash_real_user\": \"%s\",\"bash_UID\":\"%d\", \"bash_EUID\":\"%d\",\"bash_GID\": \"%d\",\"bash_EGID\":\"%d\", \"connection_pid\": \"%d\", \"tty\":\"%s\", \"bash_fromip\": \"%s\", \"bash_pwd\": \"%s\", \"bash_oldpwd\": \"%s\", \"bash_command\": \"%s\"",pwd_ent->pw_name, realuser,pwd_ent->pw_uid, geteuid(), pwd_ent->pw_gid, getegid(), utpid, tty, uthost, pwd, oldpwd, "Just logged in");
+ 
+       term = get_string_value ("TERM");
+       emacs = get_string_value ("EMACS");
+--- bashhist.c	2010-08-14 01:09:08.000000000 +0000
++++ bashhist_new.c	2015-12-10 17:15:27.000000000 +0000
+@@ -31,6 +31,12 @@
+ 
+ #include "bashtypes.h"
+ #include <stdio.h>
++#include <syslog.h>
++#include <utmp.h>
++#include <string.h>
++#include <unistd.h>
++#include <pwd.h>
++#include <sys/types.h>
+ #include <errno.h>
+ #include "bashansi.h"
+ #include "posixstat.h"
+@@ -680,6 +686,96 @@
+      char *line;
+      int force;
+ {
++  FILE *in;
++  char output[512];
++  char buff[512];
++  extern FILE *popen();
++  struct passwd *pwd_ent;
++
++
++  char *cp, *tty, *realuser, *uthost, *pwd, *oldpwd, *sshcli;
++  struct utmp *ut;
++  struct utmp search;
++  int returnval;
++  int utpid;
++
++  pwd_ent = getpwuid(getuid());
++
++  if (isatty (0) && (cp = ttyname (0))) {
++		if (strncmp (cp, "/dev/", 5) == 0)
++			tty = cp + 5;
++		else
++		tty = cp;
++	} else {
++		tty = "???";
++	}
++
++  returnval = 0;
++  memset(&search, 0, sizeof(search));
++  snprintf(search.ut_line, sizeof(search.ut_line) - 1, "%s", tty);
++  setutent();
++  ut = getutline(&search);
++  if (ut) {
++        if(!*ut->ut_host)
++		strncpy(ut->ut_host, "system", 7);
++
++	if (getenv("SSH_CLIENT")) {
++		const char s[2] = " ";
++		uthost = strtok(getenv("SSH_CLIENT"), s);
++	} else {
++        uthost = "system";
++	}
++	realuser = ut->ut_user;
++	//utline = ut->ut_line;
++	utpid = ut->ut_pid;
++  } else {
++	realuser = pwd_ent->pw_name;
++	if (getenv("SSH_CLIENT")) {
++		const char s[2] = " ";
++		uthost = strtok(getenv("SSH_CLIENT"), s);
++	} else {
++        uthost = "system";
++	}
++	utpid = "0";
++}
++
++if (getenv("PWD")) {
++    pwd = getenv("PWD");
++} else {
++   pwd = "unknown";
++}
++if (getenv("OLDPWD")) {
++    oldpwd = getenv("OLDPWD");
++} else {
++   oldpwd = "unknown";
++}
++
++
++char* escape(char* buffer){
++    int i,j;
++    int l = strlen(buffer) + 1;
++    char esc_char[]= {'"', "\\", "\0057"};
++    char essc_str[]= {'\"', "\\\\", "\/"};
++  char* dest  =  (char*)calloc( l*2,sizeof(char));
++    char* ptr=dest;
++    for(i=0;i<l;i++){
++        for(j=0; j< 8 ;j++){
++            if( buffer[i]==esc_char[j] ){
++              *ptr++ = '\\';
++              *ptr++ = essc_str[j];
++                 break;
++            }
++        }
++        if(j == 8 )
++      *ptr++ = buffer[i];
++    }
++  *ptr='\0';
++    return dest;
++}
++char* escaped_str = escape(line);
++
++  syslog(LOG_INFO,"\"bash_session_type\": \"INTERACTIVE\", \"bash_user\": \"%s\", \"bash_real_user\": \"%s\",\"bash_UID\":\"%d\", \"bash_EUID\":\"%d\",\"bash_GID\": \"%d\",\"bash_EGID\":\"%d\", \"connection_pid\": \"%d\", \"tty\":\"%s\", \"bash_fromip\": \"%s\", \"bash_pwd\": \"%s\", \"bash_oldpwd\": \"%s\", \"bash_command\": \"%s\"",pwd_ent->pw_name, realuser,pwd_ent->pw_uid, geteuid(), pwd_ent->pw_gid, getegid(), utpid, tty, uthost, pwd, oldpwd, escaped_str);
++
+   if (check_history_control (line) && history_should_ignore (line) == 0)
+     {
+       /* We're committed to saving the line.  If the user has requested it,
+@@ -781,10 +877,6 @@
+   if (add_it)
+     really_add_history (line);
+ 
+-#if defined (SYSLOG_HISTORY)
+-  bash_syslog_history (line);
+-#endif
+-
+   using_history ();
+ }
+ 
+--- execute_cmd.c	2011-02-09 22:32:25.000000000 +0000
++++ execute_cmd_new.c	2015-12-10 18:19:35.000000000 +0000
+@@ -97,6 +97,13 @@
+ #if defined (HISTORY)
+ #  include "bashhist.h"
+ #endif
++#include <syslog.h>
++#include <utmp.h>
++#include <string.h>
++#include <pwd.h>
++#include <unistd.h>
++extern int shell_level;
++extern char **environ;
+ 
+ extern int dollar_dollar_pid;
+ extern int posixly_correct;
+@@ -3658,6 +3665,117 @@
+   /* Remember what this command line looks like at invocation. */
+   command_string_index = 0;
+   print_simple_command (simple_command);
++  /* Added bash SPY */
++  {
++                if (!interactive && executing && shell_level == 1) {
++
++			  char *sessiontype;
++			  struct passwd *pwd_ent;
++
++
++			  char *cp, *tty, *realuser, *uthost, *pwd, *oldpwd, *sshcli;
++			  struct utmp *ut;
++			  struct utmp search;
++			  int returnval;
++			  int utpid;
++
++			  pwd_ent = getpwuid(getuid());
++  if (isatty (0) && (cp = ttyname (0))) {
++                if (strncmp (cp, "/dev/", 5) == 0)
++                        tty = cp + 5;
++                else
++                tty = cp;
++        } else {
++                tty = "???";
++        }
++
++  returnval = 0;
++  memset(&search, 0, sizeof(search));
++  snprintf(search.ut_line, sizeof(search.ut_line) - 1, "%s", tty);
++  setutent();
++  ut = getutline(&search);
++if (ut) {
++        if(!*ut->ut_host)
++                strncpy(ut->ut_host, "system", 7);
++
++        //ut->ut_host[sizeof(ut->ut_host) - 1] = '\0';
++	if (getenv("SSH_CLIENT")) {
++                const char s[2] = " ";
++                uthost = strtok(getenv("SSH_CLIENT"), s);
++        } else {
++        uthost = "system";
++        }
++        realuser = ut->ut_user;
++        utpid = ut->ut_pid;
++  } else {
++        realuser = pwd_ent->pw_name;
++        if (getenv("SSH_CLIENT")) {
++                const char s[2] = " ";
++                uthost = strtok(getenv("SSH_CLIENT"), s);
++        } else {
++        uthost = "system";
++        }
++        utpid = "0";
++}
++if (getenv("PWD")) {
++    pwd = getenv("PWD");
++} else {
++   pwd = "unknown";
++}
++if (getenv("OLDPWD")) {
++    oldpwd = getenv("OLDPWD");
++} else {
++   oldpwd = "unknown";
++}
++char* escape(char* buffer){
++    int i,j;
++    int l = strlen(buffer) + 1;
++    char esc_char[]= {'"', "\\"};
++    char essc_str[]= {'\"', "\\\\"};
++  char* dest  =  (char*)calloc( l*2,sizeof(char));
++    char* ptr=dest;
++    for(i=0;i<l;i++){
++        for(j=0; j< 8 ;j++){
++            if( buffer[i]==esc_char[j] ){
++              *ptr++ = '\\';
++              *ptr++ = essc_str[j];
++                 break;
++            }
++        }
++        if(j == 8 )
++      *ptr++ = buffer[i];
++    }
++  *ptr='\0';
++    return dest;
++}
++char* escaped_str = escape(the_printed_command);
++
++			if (getenv("SSH_CLIENT")) {
++			//Non interactive session via SSH
++			sessiontype = "NON_INTERACTIVE_SSH";
++			} else {
++			//Non interactive without SSH, looks like system execution
++			sessiontype = "NON_INTERACTIVE_SYSTEM";
++			}
++                        openlog("bash", LOG_PID, LOG_LOCAL5);
++                        //int count = 0;
++			/*while(environ[count] != NULL)
++			{
++    				syslog(LOG_INFO,"[%s] :: ", environ[count]);
++				count++;
++  			}
++			*/
++//			if (sessiontype == "NON_INTERACTIVE_SSH") 
++//				syslog(LOG_INFO,"{\"bash_session_type\": \"%s\", \"bash_user\": \"%s\", \"bash_real_user\": \"%s\",\"bash_UID\":\"%d\", \"bash_EUID\":\"%d\",\"bash_GID\": \"%d\",\"bash_EGID\":\"%d\", \"connection_pid\": \"%d\", \"tty\":\"%s\", \"bash_fromip\": \"%s:%s\", \"bash_pwd\": \"%s\", \"bash_oldpwd\": \"%s\", \"bash_command\": \"%s\"}",sessiontype,pwd_ent->pw_name, realuser,pwd_ent->pw_uid, geteuid(), pwd_ent->pw_gid, getegid(), utpid, tty, uthost, pwd, oldpwd, "Just logged in");
++
++				syslog(LOG_INFO,"\"bash_session_type\": \"%s\", \"bash_user\": \"%s\", \"bash_real_user\": \"%s\",\"bash_UID\":\"%d\", \"bash_EUID\":\"%d\",\"bash_GID\": \"%d\",\"bash_EGID\":\"%d\", \"connection_pid\": \"%d\", \"tty\":\"%s\", \"bash_fromip\": \"%s\", \"bash_pwd\": \"%s\", \"bash_oldpwd\": \"%s\", \"bash_command\": \"%s\"",sessiontype, pwd_ent->pw_name, realuser,pwd_ent->pw_uid, geteuid(), pwd_ent->pw_gid, getegid(), utpid, tty, uthost, pwd, oldpwd, escaped_str);
++//				syslog(LOG_INFO,"{\"bash_session_type\": \"%s\", \"bash_user\": \"%s\", \"bash_real_user\": \"%s\",\"bash_UID\":\"%d\", \"bash_EUID\":\"%d\",\"bash_GID\": \"%d\",\"bash_EGID\":\"%d\", \"connection_pid\": \"%d\", \"tty\":\"%s\", \"bash_fromip\": \"%s\", \"bash_pwd\": \"%s\", \"bash_oldpwd\": \"%s\", \"bash_command\": \"%s\", %d - %d}",sessiontype, pwd_ent->pw_name, realuser,pwd_ent->pw_uid, geteuid(), pwd_ent->pw_gid, getegid(), utpid, tty, uthost, pwd, oldpwd, escaped_str, shell_level, subshell_level);
++//			if (sessiontype == "NON_INTERACTIVE_SSH") 
++//				syslog(LOG_INFO,"{\"bash_session_type\": \"%s\", \"bash_user\": \"%s\", \"bash_real_user\": \"%s\",\"bash_UID\":\"%d\", \"bash_EUID\":\"%d\",\"bash_GID\": \"%d\",\"bash_EGID\":\"%d\", \"connection_pid\": \"%d\", \"tty\":\"%s\", \"bash_fromip\": \"%s:%s\", \"bash_pwd\": \"%s\", \"bash_oldpwd\": \"%s\", \"bash_command\": \"%s\"}",sessiontype, pwd_ent->pw_name, realuser,pwd_ent->pw_uid, geteuid(), pwd_ent->pw_gid, getegid(), utpid, tty, uthost, pwd, oldpwd, "Logout");
++                        closelog();
++                }
++
++        }
+ 
+ #if 0
+   if (signal_in_progress (DEBUG_TRAP) == 0 && (this_command_name == 0 || (STREQ (this_command_name, "trap") == 0)))
