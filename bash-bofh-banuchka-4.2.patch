@@ -1,0 +1,459 @@
+--- shell.c_orig	2016-01-18 16:13:50.000000000 +0000
++++ shell.c	2016-01-18 16:34:35.000000000 +0000
+@@ -78,6 +78,12 @@
+ 
+ #include <tilde/tilde.h>
+ #include <glob/strmatch.h>
++#include <syslog.h>
++#include <utmp.h>
++#include <string.h>
++#include <pwd.h>
++#include <unistd.h>
++#include <sys/types.h>
+ 
+ #if defined (__OPENNT)
+ #  include <opennt/opennt.h>
+@@ -523,8 +529,68 @@
+        isatty (fileno (stdin)) &&	/* Input is a terminal and */
+        isatty (fileno (stderr))))	/* error output is a terminal. */
+     init_interactive ();
+-  else
++  else {
++if (command_execution_string) {
++  /* Added bash SPY */
++
++  struct passwd *pwd_ent;
++  char *cp, *tty, *realuser, *uthost, *pwd, *oldpwd, *sshcli, *sessiontype;
++  int returnval;
++  int utpid;
++
++  pwd_ent = getpwuid(getuid());
++  if (isatty (0) && (cp = ttyname (0))) {
++                if (strncmp (cp, "/dev/", 5) == 0)
++                        tty = cp + 5;
++                else
++                tty = cp;
++        } else {
++                tty = "???";
++        }
++  returnval = 0;
++  realuser = pwd_ent->pw_name;
++if (getenv("SSH_CLIENT")) {
++      const char s[2] = " ";
++      uthost = strtok(getenv("SSH_CLIENT"), s);
++  } else {
++      uthost = "system";
++  }
++  utpid = 0;
++  if (getenv("PWD")) {
++    pwd = getenv("PWD");
++  } else {
++   pwd = "unknown";
++  }
++  if (getenv("OLDPWD")) {
++    oldpwd = getenv("OLDPWD");
++  } else {
++   oldpwd = "unknown";
++  }
++//https://github.com/marel-keytech/jsoncc/blob/master/tst/json_string_test.c
++char* encode(const char* str)
++{
++    return json_string_encode(str, strlen(str));
++}
++
++char* decode(const char* str)
++{
++    return json_string_decode(str, strlen(str));
++}
++char* escaped_str=encode(command_execution_string);
++
++if (getenv("SSH_CLIENT")) {
++                        //Non interactive session via SSH
++                        sessiontype = "NON_INTERACTIVE_SSH";
++                        } else {
++                        //Non interactive without SSH, looks like system execution
++                        sessiontype = "NON_INTERACTIVE_SYSTEM";
++                        }
++    openlog("bash", LOG_PID, LOG_LOCAL5);
++    syslog(LOG_INFO,"\"bash_session_type\": \"%s\", \"bash_user\": \"%s\", \"bash_real_user\": \"%s\",\"bash_UID\":\"%d\", \"bash_EUID\":\"%d\",\"bash_GID\": \"%d\",\"bash_EGID\":\"%d\", \"connection_pid\": \"%d\", \"tty\":\"%s\", \"bash_fromip\": \"%s\", \"bash_pwd\": \"%s\", \"bash_oldpwd\": \"%s\", \"bash_command\": \"%s\"",sessiontype, pwd_ent->pw_name, realuser,pwd_ent->pw_uid, geteuid(), pwd_ent->pw_gid, getegid(), utpid, tty, uthost, pwd, oldpwd,escaped_str);
++    closelog();
++}
+     init_noninteractive ();
++}
+ 
+   /*
+    * Some systems have the bad habit of starting login shells with lots of open
+@@ -568,6 +634,64 @@
+   if (interactive_shell)
+     {
+       char *term, *emacs;
++      struct passwd *pwd_ent;
++      
++      char *cp, *tty, *realuser, *uthost, *pwd, *oldpwd, *sshcli;
++      struct utmp *ut;
++      struct utmp search;
++      int returnval;
++      int utpid;
++
++      pwd_ent = getpwuid(getuid());
++      openlog("bash", LOG_PID, LOG_LOCAL5);
++        if (isatty (0) && (cp = ttyname (0))) {
++                if (strncmp (cp, "/dev/", 5) == 0)
++                        tty = cp + 5;
++                else
++                tty = cp;
++        } else {
++                tty = "???";
++        }
++
++  returnval = 0;
++  memset(&search, 0, sizeof(search));
++  snprintf(search.ut_line, sizeof(search.ut_line) - 1, "%s", tty);
++  setutent();
++  ut = getutline(&search);
++  if (ut) {
++        if(!*ut->ut_host)
++                strncpy(ut->ut_host, "system", 7);
++	if (getenv("SSH_CLIENT")) {
++                const char s[2] = " ";
++                uthost = strtok(getenv("SSH_CLIENT"), s);
++        } else {
++        uthost = "system";
++        }
++        realuser = ut->ut_user;
++        utpid = ut->ut_pid;
++  } else {
++        realuser = pwd_ent->pw_name;
++	if (getenv("SSH_CLIENT")) {
++                const char s[2] = " ";
++                //char *token;
++                uthost = strtok(getenv("SSH_CLIENT"), s);
++        } else {
++        uthost = "system";
++        }
++        utpid = "0";
++}
++if (getenv("PWD")) {
++    pwd = getenv("PWD");
++} else {
++   pwd = "unknown";
++}
++if (getenv("OLDPWD")) {
++    oldpwd = getenv("OLDPWD");
++} else {
++   oldpwd = "unknown";
++}
++
++  syslog(LOG_INFO,"\"bash_session_type\": \"INTERACTIVE\", \"bash_user\": \"%s\", \"bash_real_user\": \"%s\",\"bash_UID\":\"%d\", \"bash_EUID\":\"%d\",\"bash_GID\": \"%d\",\"bash_EGID\":\"%d\", \"connection_pid\": \"%d\", \"tty\":\"%s\", \"bash_fromip\": \"%s\", \"bash_pwd\": \"%s\", \"bash_oldpwd\": \"%s\", \"bash_command\": \"%s\"",pwd_ent->pw_name, realuser,pwd_ent->pw_uid, geteuid(), pwd_ent->pw_gid, getegid(), utpid, tty, uthost, pwd, oldpwd, "Just logged in");
+ 
+       term = get_string_value ("TERM");
+       emacs = get_string_value ("EMACS");
+--- bashhist.c_orig	2016-01-18 16:13:44.000000000 +0000
++++ bashhist.c	2016-01-18 16:29:54.000000000 +0000
+@@ -31,6 +31,12 @@
+ 
+ #include "bashtypes.h"
+ #include <stdio.h>
++#include <syslog.h>
++#include <utmp.h>
++#include <string.h>
++#include <unistd.h>
++#include <pwd.h>
++#include <sys/types.h>
+ #include <errno.h>
+ #include "bashansi.h"
+ #include "posixstat.h"
+@@ -63,6 +69,203 @@
+ extern int errno;
+ #endif
+ 
++
++//Bash SPY -> JSON
++/*
++ * Copyright (c) 2015, Marel hf
++ * Copyright (c) 2015, Andri Yngvason
++ *
++ * Permission to use, copy, modify, and/or distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
++ * REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
++ * AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
++ * INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
++ * LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
++ * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
++ * PERFORMANCE OF THIS SOFTWARE.
++ */
++
++#include <ctype.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "json_string.h"
++
++struct buffer {
++    char* buffer;
++    size_t size;
++    int index;
++};
++
++static ssize_t buffer_grow(struct buffer* self, size_t size)
++{
++    if(size < self->size)
++        return 0;
++    else
++        self->size = size*2;
++
++    self->buffer = realloc(self->buffer, self->size);
++    if(!self->buffer)
++        return -1;
++
++    return self->size;
++}
++
++static ssize_t buffer_append(struct buffer* self, char c)
++{
++    if(buffer_grow(self, self->index+1) < 0)
++        return -1;
++    
++    self->buffer[self->index++] = c;
++
++    return 1;
++}
++
++static ssize_t buffer_append_str(struct buffer* self, const char* str, size_t len)
++{
++    if(buffer_grow(self, self->index+len) < 0)
++        return -1;
++    
++    memcpy(&self->buffer[self->index], str, len);
++    self->index += len;
++
++    return (ssize_t)len;
++}
++
++static inline int convertdigit(char digit)
++{
++    return isdigit(digit) ? digit - '0' : tolower(digit) - 'a';
++}
++
++static ssize_t decode_unicode(struct buffer* output, const char* input,
++                              const char* end)
++{
++    if(input >= end)
++        return 1;
++
++    if(!(isxdigit(input[0]) && isxdigit(input[1]) &&
++         isxdigit(input[2]) && isxdigit(input[3])))
++        return 1;
++
++    unsigned int code = convertdigit(input[0]) << 12
++                      | convertdigit(input[1]) << 8
++                      | convertdigit(input[2]) << 4
++                      | convertdigit(input[3]);
++
++    /* only ascii is supported for now */
++    if(code <= 0xff)
++        if(buffer_append(output, code) < 0)
++            return -1;
++
++    return 5;
++}
++
++static ssize_t decode_escape(struct buffer* output, const char* input,
++                             const char* end)
++{
++    if(input >= end)
++        return 1;
++
++    switch(*input)
++    {
++    case 'b': return buffer_append(output, '\b');
++    case 'f': return buffer_append(output, '\f');
++    case 'n': return buffer_append(output, '\n');
++    case 'r': return buffer_append(output, '\r');
++    case 't': return buffer_append(output, '\t');
++    case 'u': return decode_unicode(output, input+1, end);
++    default:  return buffer_append(output, *input);
++    }
++}
++
++__attribute__((visibility("default")))
++char* json_string_decode(const char* input, size_t len)
++{
++    const char* end = input + len;
++    ssize_t sz;
++    struct buffer output;
++    memset(&output, 0, sizeof(output));
++
++    if(buffer_grow(&output, strlen(input)+1) < 0)
++        return NULL;
++
++    while(input < end)
++    {
++        sz = *input != '\\' ? buffer_append(&output, *input)
++                            : decode_escape(&output, ++input, end);
++
++        if(sz < 0)
++            return NULL;
++
++        input += sz;
++    }
++
++    if(buffer_append(&output, 0) < 0)
++        return NULL;
++
++    return output.buffer;
++}
++
++static inline char get_hexdigit(int number)
++{
++    const char lookup[] = "0123456789abcdef";
++    return lookup[number];
++}
++
++static int encode_nonprint(struct buffer* output, char c)
++{
++    char str[6] = {
++        '\\', 'u', '0', '0',
++        get_hexdigit((c & 0xf0) >> 8),
++        get_hexdigit(c & 0xf)
++    };
++
++    if(buffer_append_str(output, str, sizeof(str)) < 0)
++        return 1;
++
++    return 1;
++}
++
++static int encode_character(struct buffer* output, char c)
++{
++    switch(c)
++    {
++    case '\b': return buffer_append_str(output, "\\b", 2);
++    case '\f': return buffer_append_str(output, "\\f", 2);
++    case '\n': return buffer_append_str(output, "\\n", 2);
++    case '\r': return buffer_append_str(output, "\\r", 2);
++    case '\t': return buffer_append_str(output, "\\t", 2);
++    case '\\': return buffer_append_str(output, "\\\\", 2);
++    case '"':  return buffer_append_str(output, "\\\"", 2);
++    default:   return isprint(c) ? buffer_append(output, c)
++                                 : encode_nonprint(output, c);
++    }
++}
++
++__attribute__((visibility("default")))
++char* json_string_encode(const char* input, size_t len)
++{
++    const char* end = input + len;
++    struct buffer output;
++    memset(&output, 0, sizeof(output));
++
++    if(buffer_grow(&output, strlen(input)+1) < 0)
++        return NULL;
++
++    while(input < end)
++        if(encode_character(&output, *input++) < 0)
++            return NULL;
++
++    if(buffer_append(&output, 0) < 0)
++        return NULL;
++
++    return output.buffer;
++}
++
++
+ static int histignore_item_func __P((struct ign *));
+ static int check_history_control __P((char *));
+ static void hc_erasedups __P((char *));
+@@ -680,6 +883,78 @@
+      char *line;
+      int force;
+ {
++  struct passwd *pwd_ent;
++
++  char *cp, *tty, *realuser, *uthost, *pwd, *oldpwd, *sshcli;
++  struct utmp *ut;
++  struct utmp search;
++  int returnval;
++  int utpid;
++
++  pwd_ent = getpwuid(getuid());
++
++  if (isatty (0) && (cp = ttyname (0))) {
++		if (strncmp (cp, "/dev/", 5) == 0)
++			tty = cp + 5;
++		else
++		tty = cp;
++	} else {
++		tty = "???";
++	}
++
++  returnval = 0;
++  memset(&search, 0, sizeof(search));
++  snprintf(search.ut_line, sizeof(search.ut_line) - 1, "%s", tty);
++  setutent();
++  ut = getutline(&search);
++  if (ut) {
++        if(!*ut->ut_host)
++		strncpy(ut->ut_host, "system", 7);
++	if (getenv("SSH_CLIENT")) {
++		const char s[2] = " ";
++		uthost = strtok(getenv("SSH_CLIENT"), s);
++	} else {
++        uthost = "system";
++	}
++	realuser = ut->ut_user;
++	utpid = ut->ut_pid;
++  } else {
++	realuser = pwd_ent->pw_name;
++	if (getenv("SSH_CLIENT")) {
++		const char s[2] = " ";
++		uthost = strtok(getenv("SSH_CLIENT"), s);
++	} else {
++        uthost = "system";
++	}
++	utpid = "0";
++}
++
++if (getenv("PWD")) {
++    pwd = getenv("PWD");
++} else {
++   pwd = "unknown";
++}
++if (getenv("OLDPWD")) {
++    oldpwd = getenv("OLDPWD");
++} else {
++   oldpwd = "unknown";
++}
++
++//https://github.com/marel-keytech/jsoncc/blob/master/tst/json_string_test.c
++char* encode(const char* str)
++{
++    return json_string_encode(str, strlen(str));
++}
++
++char* decode(const char* str)
++{
++    return json_string_decode(str, strlen(str));
++}
++
++char* escaped_str=encode(line);
++
++  syslog(LOG_INFO,"\"bash_session_type\": \"INTERACTIVE\", \"bash_user\": \"%s\", \"bash_real_user\": \"%s\",\"bash_UID\":\"%d\", \"bash_EUID\":\"%d\",\"bash_GID\": \"%d\",\"bash_EGID\":\"%d\", \"connection_pid\": \"%d\", \"tty\":\"%s\", \"bash_fromip\": \"%s\", \"bash_pwd\": \"%s\", \"bash_oldpwd\": \"%s\", \"bash_command\": \"%s\"",pwd_ent->pw_name, realuser,pwd_ent->pw_uid, geteuid(), pwd_ent->pw_gid, getegid(), utpid, tty, uthost, pwd, oldpwd, escaped_str);
++
+   if (check_history_control (line) && history_should_ignore (line) == 0)
+     {
+       /* We're committed to saving the line.  If the user has requested it,
+@@ -781,10 +1056,6 @@
+   if (add_it)
+     really_add_history (line);
+ 
+-#if defined (SYSLOG_HISTORY)
+-  bash_syslog_history (line);
+-#endif
+-
+   using_history ();
+ }
+ 
